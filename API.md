@@ -286,7 +286,24 @@ GET /hls/{station_id}/{bitrate}/index.m3u8
 
 ---
 
-## 9. Health Check
+## 9. Traditional MP3 Streaming (Continuous)
+
+Provides a legacy-compatible, low-latency continuous MP3 stream (Icecast-style).
+
+```
+GET /stream/{station_id}.mp3
+```
+
+| Feature | Description |
+|---------|-------------|
+| **Latency** | Low (1-3 seconds) |
+| **Compatibility** | Winamp, VLC, Windows Media Player, Mobile Apps |
+| **CDN** | ⚠️ Cannot be cached by standard CDNs (e.g. Cloudflare) |
+| **Bandwidth** | Consumes origin bandwidth directly for every listener |
+
+---
+
+## 10. Health Check
 
 ```
 GET /health
@@ -299,7 +316,7 @@ GET /health
 
 ---
 
-## 10. CORS Policy
+## 11. CORS Policy
 
 All endpoints allow access from any origin:
 - `Access-Control-Allow-Origin: *`
@@ -307,7 +324,7 @@ All endpoints allow access from any origin:
 
 ---
 
-## 11. Integration Examples
+## 12. Integration Examples
 
 ### HTML5 Player (HLS.js)
 
@@ -323,7 +340,7 @@ All endpoints allow access from any origin:
 
 ---
 
-## 12. Audio Processing Pipeline
+## 13. Audio Processing Pipeline
 
 ```
 Request ──> Inject Queue
@@ -345,7 +362,7 @@ Request ──> Inject Queue
 
 ---
 
-## Security Note
+## 14. Security Note
 
 **Important:** This API is unauthenticated by default. If you bind the server to `0.0.0.0` or expose port 8080 to the public internet, anyone can manage your stations. 
 
