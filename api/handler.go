@@ -56,6 +56,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Serve HLS output files for clients
 	hlsServer := http.StripPrefix("/hls/", http.FileServer(http.Dir(h.serveDir)))
 	mux.Handle("/hls/", h.corsMiddleware(hlsServer.ServeHTTP))
+
+	// Continuous MP3 Stream
+	mux.HandleFunc("/stream/", h.corsMiddleware(h.handleRadioStream))
 }
 
 // RegisterPort80Routes registers routes specifically for port 80 (Shortcuts)
@@ -65,6 +68,9 @@ func (h *Handler) RegisterPort80Routes(mux *http.ServeMux) {
 	// Also serve HLS on port 80 so redirects work
 	hlsServer := http.StripPrefix("/hls/", http.FileServer(http.Dir(h.serveDir)))
 	mux.Handle("/hls/", h.corsMiddleware(hlsServer.ServeHTTP))
+
+	// Continuous MP3 Stream
+	mux.HandleFunc("/stream/", h.corsMiddleware(h.handleRadioStream))
 }
 
 // handlePort80 redirects root requests to the master playlist for each station
@@ -246,6 +252,41 @@ func (h *Handler) handleDoNothing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"ok","message":"I am doing absolutely nothing. Enjoy the silence."}`))
+}
+
+func (h *Handler) handleRadioStream(w http.ResponseWriter, r *http.Request) {
+	// Format: /stream/radio1.mp3
+	stationPart := strings.TrimPrefix(r.URL.Path, "/stream/")
+	stationID := strings.Split(stationPart, ".")[0]
+
+	runner, exists := h.manager.GetStation(stationID)
+	if !exists {
+		http.Error(w, "Station not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	// Add listener to broadcaster
+	listener := runner.Encoder.Broadcaster.AddListener()
+	defer runner.Encoder.Broadcaster.RemoveListener(listener)
+
+	log.Printf("[Stream] New listener connected to station %s", stationID)
+
+	// Stream data to client
+	flusher, ok := w.(http.Flusher)
+	for data := range listener {
+		_, err := w.Write(data)
+		if err != nil {
+			log.Printf("[Stream] Listener disconnected from station %s", stationID)
+			return
+		}
+		if ok {
+			flusher.Flush()
+		}
+	}
 }
 
 // handleCreateStation creates a new station
