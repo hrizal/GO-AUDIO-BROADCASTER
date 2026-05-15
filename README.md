@@ -46,6 +46,11 @@ curl -X POST http://localhost:8080/inject \
   }'
 ```
 
+### 💡 Pro Tip: Multi-Station "Simulcast" Broadcaster
+Since Go Audio Streamer supports multiple independent stations, you can create a radio network with different genres (e.g., `pop`, `jazz`, `rock`) and have **one announcer speak on all of them simultaneously**.
+- **How**: Send a `/breaking` API request to all station IDs with the same announcer audio file. 
+- **Effect**: All stations will automatically "duck" their respective music genres and broadcast the announcer's voice at the exact same time.
+
 ## Quick Start
 
 ### 1. Requirements
