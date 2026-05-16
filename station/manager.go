@@ -238,7 +238,7 @@ func (m *Manager) createStationWithDir(id string, outputDir string, playlistDir 
 	// Auto-inject playlist if configured
 	if playlistDir != "" {
 		var allFiles []string
-		extensions := []string{"*.mp3", "*.wav", "*.ogg", "*.flac", "*.aac", "*.m4a", "*.wma"}
+		extensions := []string{"*.mp3", "*.wav", "*.ogg", "*.flac", "*.aac", "*.m4a", "*.wma", "*.mp4", "*.mkv", "*.avi"}
 		for _, ext := range extensions {
 			files, err := filepath.Glob(filepath.Join(playlistDir, ext))
 			if err == nil {
