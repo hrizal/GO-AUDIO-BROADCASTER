@@ -195,6 +195,29 @@ A template for systemd service is provided in `streamer.service`. Use the `insta
     - Run the streamer behind a Reverse Proxy (e.g., Nginx) with Basic Auth or Token validation.
     - Keep the API port closed to the public internet.
 
+## 📱 Experimental: Run on Android (Termux)
+
+For developers and experimenters, you can actually turn an old Android smartphone into a 24/7 radio station server! Since this project is written in Go and relies on FFmpeg, it can run on Android via **Termux**.
+
+### Steps:
+1. **Install Termux** on your Android device (available on F-Droid).
+2. **Install FFmpeg** inside Termux:
+   ```bash
+   pkg update && pkg install ffmpeg
+   ```
+3. **Cross-compile** the binary from your PC for Android ARM64:
+   ```bash
+   GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -o streamer-android main.go
+   ```
+4. **Transfer** the `streamer-android` binary and your `silent/` folder to your phone.
+5. **Run** it inside Termux:
+   ```bash
+   chmod +x streamer-android
+   ./streamer-android -port 8080 -config station.cfg
+   ```
+
+Your phone is now a fully functional HLS audio broadcaster!
+
 ## Support the Project
 
 If you find this project useful and want to support its development, you can buy me a coffee!
