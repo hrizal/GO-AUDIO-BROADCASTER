@@ -91,7 +91,10 @@ type PlaybackConfig struct {
 	Opus128 bool `json:"opus128"`
 	MP3    bool `json:"mp3"`
 	// HLS segment duration
-	HlsTime int `json:"hls_time"`
+	HlsTime   int    `json:"hls_time"`
+	RTMP      string `json:"rtmp"`
+	Logo      string `json:"logo"`
+	VideoLoop string `json:"video_loop"`
 	// Crossfade duration in seconds
 	Crossfade int `json:"crossfade"`
 }

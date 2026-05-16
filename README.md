@@ -14,7 +14,22 @@ A high-performance audio streaming server written in Go. It supports real-time a
 - **Easy Station Shortcuts**: Automatic listener on port 80 (if available) for easy access: `http://yourip/station_id/`. Can be disabled using `-shortcuts=false`.
 - **Wide Format Support**: Supports MP3, WAV, OGG, FLAC, AAC, M4A, and WMA.
 - **Video to Audio**: Automatically extracts audio from video files (MP4, MKV, AVI) in your playlist.
+- **RTMP Live Streaming (TikTok/YouTube)**
+
+You can relay your station's audio to live streaming platforms by adding RTMP settings to your configuration.
+
+**Configuration Parameters:**
+- `rtmp`: Your RTMP URL + Stream Key (e.g., `rtmp://server.com/live/key`).
+- `video_loop` (optional): Path to a video file to loop as background.
+- `logo` (optional): Path to an image file to overlay on the video.
+
+If `video_loop` is not provided, the streamer generates a beautiful **Misty Ambient** moving background (purple/blue fog) automatically.
+
+---
+
+### Hardware Audio Input
 - **Live Hardware Input**: Capture live audio from system devices (WASAPI, ALSA, PulseAudio) using the `device:` prefix.
+- **RTMP Live Relay**: Synchronized live streaming to TikTok, YouTube, or Facebook with customizable background video and logo overlay.
 - **Icecast/Shoutcast Relay**: Can pull remote streams and convert them to HLS in real-time.
 
 ## 🎧 Advanced Audio Engine

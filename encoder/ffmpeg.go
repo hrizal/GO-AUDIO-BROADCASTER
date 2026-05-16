@@ -113,6 +113,70 @@ func (ae *AudioEngine) startFFmpeg() error {
 		return fmt.Errorf("stdin pipe: %w", err)
 	}
 
+	var multiOut io.Writer = stdin
+	var rtmpStdin io.WriteCloser
+
+	// Prepare RTMP Relay if configured
+	if ae.station.Config.RTMP != "" {
+		// Build RTMP inputs dynamically
+		rtmpArgs := []string{}
+		vIdx := 0
+		lIdx := -1
+		
+		// Input 0: Video Background (File or Synthetic Misty Fog)
+		if ae.station.Config.VideoLoop != "" {
+			rtmpArgs = append(rtmpArgs, "-stream_loop", "-1", "-i", ae.station.Config.VideoLoop)
+		} else {
+			// Generate a synthetic "Misty Purple/Blue" moving fog using lavfi
+			// We use blurred testsrc2 with hue shifting for a chill ambient look
+			mistyFilter := "testsrc2=s=640x360:r=15,boxblur=40:40,hue=h='t*5':s=2"
+			rtmpArgs = append(rtmpArgs, "-f", "lavfi", "-i", mistyFilter)
+		}
+		vIdx = 0
+		nextIdx := 1
+
+		// Input (Optional): Logo
+		if ae.station.Config.Logo != "" {
+			rtmpArgs = append(rtmpArgs, "-i", ae.station.Config.Logo)
+			lIdx = nextIdx
+			nextIdx++
+		}
+
+		// Input: Audio from Mixer (stdin)
+		aIdx := nextIdx
+		rtmpArgs = append(rtmpArgs, "-f", "s16le", "-ar", "44100", "-ac", "2", "-i", "-")
+
+		// Filter Complex for Compositing
+		filter := fmt.Sprintf("[%d:v]scale=640:360[bg]", vIdx)
+		outV := "[bg]"
+		if lIdx != -1 {
+			filter += fmt.Sprintf("; [bg][%d:v]overlay=main_w-overlay_w-10:10[outv]", lIdx)
+			outV = "[outv]"
+		}
+
+		rtmpArgs = append(rtmpArgs, 
+			"-filter_complex", filter,
+			"-map", outV, "-map", fmt.Sprintf("%d:a", aIdx),
+			"-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-g", "30",
+			"-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+			"-f", "flv", ae.station.Config.RTMP,
+		)
+
+		rCmd := exec.Command("ffmpeg", rtmpArgs...)
+		rStdin, err := rCmd.StdinPipe()
+		if err == nil {
+			rCmd.Stderr = log.Writer()
+			if err := rCmd.Start(); err == nil {
+				log.Printf("%s [Encoder] RTMP Relay started to: %s (VideoLoop=%v, Logo=%v)", 
+					ae.station.LogPrefix, ae.station.Config.RTMP, ae.station.Config.VideoLoop != "", ae.station.Config.Logo != "")
+				rtmpStdin = rStdin
+				multiOut = io.MultiWriter(multiOut, rStdin)
+			} else {
+				log.Printf("%s [Encoder] Warning: Failed to start RTMP Relay: %v", ae.station.LogPrefix, err)
+			}
+		}
+	}
+
 	// Capture stderr directly to the main log for unified debugging
 	cmd.Stderr = log.Writer()
 
@@ -139,16 +203,16 @@ func (ae *AudioEngine) startFFmpeg() error {
 			// Fan out the MP3 output to all connected listeners
 			go ae.Broadcaster.BroadcastFrom(sStdout)
 			
-			// Initialize and start Mixer (8 Channels) with HLS + MP3 output
-			multiOut := io.MultiWriter(stdin, sStdin)
+			// Combine all active outputs
+			multiOut = io.MultiWriter(multiOut, sStdin)
 			ae.Mixer = NewAudioMixer(multiOut, 8)
 		} else {
 			log.Printf("%s [Encoder] Warning: Failed to start Radio Stream (MP3): %v", ae.station.LogPrefix, err)
-			ae.Mixer = NewAudioMixer(stdin, 8)
+			ae.Mixer = NewAudioMixer(multiOut, 8)
 		}
 	} else {
 		log.Printf("%s [Encoder] Radio Stream (MP3) is disabled in config", ae.station.LogPrefix)
-		ae.Mixer = NewAudioMixer(stdin, 8)
+		ae.Mixer = NewAudioMixer(multiOut, 8)
 	}
 	go ae.Mixer.Start()
 

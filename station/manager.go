@@ -134,6 +134,12 @@ func loadStationConfigs(path string) ([]types.StationConfigEntry, error) {
 			switch key {
 			case "random":
 				cfg.Random = boolVal
+			case "rtmp":
+				cfg.RTMP = val
+			case "logo":
+				cfg.Logo = val
+			case "video_loop":
+				cfg.VideoLoop = val
 			case "loop":
 				cfg.Loop = boolVal
 			case "unique":
