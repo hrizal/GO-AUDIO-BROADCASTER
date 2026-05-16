@@ -148,15 +148,24 @@ func (ae *AudioEngine) startFFmpeg() error {
 
 		// Filter Complex for Compositing
 		filter := fmt.Sprintf("[%d:v]scale=640:360[bg]", vIdx)
-		outV := "[bg]"
+		lastStage := "[bg]"
+		
+		// 1. Draw Text (if configured)
+		if ae.station.Config.DisplayText != "" {
+			filter += fmt.Sprintf("; [bg]drawtext=text='%s':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=(h-text_h)/2:shadowcolor=black@0.6:shadowx=3:shadowy=3[txt]", 
+				ae.station.Config.DisplayText)
+			lastStage = "[txt]"
+		}
+
+		// 2. Overlay Logo (if exists)
 		if lIdx != -1 {
-			filter += fmt.Sprintf("; [bg][%d:v]overlay=main_w-overlay_w-10:10[outv]", lIdx)
-			outV = "[outv]"
+			filter += fmt.Sprintf("; %s[%d:v]overlay=main_w-overlay_w-20:20[outv]", lastStage, lIdx)
+			lastStage = "[outv]"
 		}
 
 		rtmpArgs = append(rtmpArgs, 
 			"-filter_complex", filter,
-			"-map", outV, "-map", fmt.Sprintf("%d:a", aIdx),
+			"-map", lastStage, "-map", fmt.Sprintf("%d:a", aIdx),
 			"-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-g", "30",
 			"-c:a", "aac", "-b:a", "128k", "-ar", "44100",
 			"-f", "flv", ae.station.Config.RTMP,

@@ -22,6 +22,7 @@ You can relay your station's audio to live streaming platforms by adding RTMP se
 - `rtmp`: Your RTMP URL + Stream Key (e.g., `rtmp://server.com/live/key`).
 - `video_loop` (optional): Path to a video file to loop as background.
 - `logo` (optional): Path to an image file to overlay on the video.
+- `display_text` (optional): Text to display in the center of the screen (e.g., Radio Name).
 
 If `video_loop` is not provided, the streamer generates a beautiful **Misty Ambient** moving background (purple/blue fog) automatically.
 

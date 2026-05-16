@@ -140,6 +140,8 @@ func loadStationConfigs(path string) ([]types.StationConfigEntry, error) {
 				cfg.Logo = val
 			case "video_loop":
 				cfg.VideoLoop = val
+			case "display_text":
+				cfg.DisplayText = val
 			case "loop":
 				cfg.Loop = boolVal
 			case "unique":
