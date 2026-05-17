@@ -89,7 +89,7 @@ type PlaybackConfig struct {
 	Opus64  bool `json:"opus64"`
 	Opus96  bool `json:"opus96"`
 	Opus128 bool `json:"opus128"`
-	MP3    bool `json:"mp3"`
+	MP3     bool `json:"mp3"`
 	// HLS segment duration
 	HlsTime     int    `json:"hls_time"`
 	RTMP        string `json:"rtmp"`
@@ -103,18 +103,18 @@ type PlaybackConfig struct {
 
 func DefaultPlaybackConfig() PlaybackConfig {
 	return PlaybackConfig{
-		Random:    false,
-		Loop:      true,
-		Unique:    true,
-		AAC64:     true,
-		AAC96:     true,
-		AAC128:    true,
+		Random: false,
+		Loop:   true,
+		Unique: true,
+		AAC64:  true,
+		AAC96:  true,
+		AAC128: true,
 		Opus32:    true,
 		Opus64:    true,
 		Opus96:    true,
 		Opus128:   true,
 		MP3:       true,
-		HlsTime:   10,
+		HlsTime: 10,
 		Crossfade: 3,
 	}
 }
@@ -230,7 +230,7 @@ type BitrateVariants struct {
 	AAC96  string
 	AAC128 string
 	// Opus variants (fmp4 container)
-	Opus32 string
+	Opus32  string
 	Opus64  string
 	Opus96  string
 	Opus128 string

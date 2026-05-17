@@ -35,6 +35,7 @@ type AudioEngine struct {
 	// Live MP3 Stream support
 	Broadcaster *Broadcaster
 	streamCmd   *exec.Cmd
+	rtmpCmd     *exec.Cmd
 }
 
 func NewAudioEngine(station *types.Station, variants types.BitrateVariants) *AudioEngine {
@@ -126,8 +127,57 @@ func (ae *AudioEngine) startFFmpeg() error {
 
 	var multiOut io.Writer = stdin
 
-	// RTMP Relay is disabled for this session
+	if ae.station.Config.RTMP != "" {
+		hasVideo := ae.station.Config.VideoLoop != ""
+		hasLogo := ae.station.Config.Logo != ""
+		hasText := ae.station.Config.DisplayText != ""
 
+		var rtmpArgs []string
+		if hasVideo {
+			rtmpArgs = append(rtmpArgs, "-stream_loop", "-1", "-i", ae.station.Config.VideoLoop)
+		} else if ae.station.Config.BackgroundImage != "" {
+			rtmpArgs = append(rtmpArgs, "-loop", "1", "-i", ae.station.Config.BackgroundImage)
+		} else {
+			// Misty background fallback
+			rtmpArgs = append(rtmpArgs, "-f", "lavfi", "-i", "color=c=#200040:s=640x360:r=30")
+		}
+
+		if hasLogo {
+			rtmpArgs = append(rtmpArgs, "-i", ae.station.Config.Logo)
+		}
+
+		rtmpArgs = append(rtmpArgs, "-f", "s16le", "-ar", "44100", "-ac", "2", "-i", "-")
+
+		filter := ""
+		if hasLogo && hasText {
+			filter = fmt.Sprintf("[0:v]scale=1280:720[bg];[bg][1:v]overlay=W-w-20:20[v1];[v1]drawtext=text='%s':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=(h-text_h)/2", ae.station.Config.DisplayText)
+		} else if hasLogo {
+			filter = "[0:v]scale=1280:720[bg];[bg][1:v]overlay=W-w-20:20"
+		} else if hasText {
+			filter = fmt.Sprintf("[0:v]scale=1280:720[bg];[bg]drawtext=text='%s':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=(h-text_h)/2", ae.station.Config.DisplayText)
+		} else {
+			filter = "[0:v]scale=1280:720"
+		}
+
+		rtmpArgs = append(rtmpArgs, "-filter_complex", filter)
+
+		rtmpArgs = append(rtmpArgs,
+			"-c:v", "libx264", "-preset", "ultrafast", "-b:v", "800k", "-maxrate", "800k", "-bufsize", "1600k", "-pix_fmt", "yuv420p", "-g", "60",
+			"-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+			"-f", "flv", ae.station.Config.RTMP,
+		)
+
+		rtmpCmd := exec.Command("ffmpeg", rtmpArgs...)
+		rtmpStdin, _ := rtmpCmd.StdinPipe()
+		rtmpCmd.Stderr = log.Writer()
+		if err := rtmpCmd.Start(); err == nil {
+			ae.rtmpCmd = rtmpCmd
+			log.Printf("%s [Encoder] RTMP Relay started to: %s (VideoLoop=%v, Logo=%v)", ae.station.LogPrefix, ae.station.Config.RTMP, hasVideo, hasLogo)
+			multiOut = io.MultiWriter(multiOut, rtmpStdin)
+		} else {
+			log.Printf("%s [Encoder] Warning: Failed to start RTMP Relay: %v", ae.station.LogPrefix, err)
+		}
+	}
 	if ae.station.Config.MP3 {
 		streamArgs := []string{
 			"-f", "s16le", "-ar", "44100", "-ac", "2", "-i", "-",
@@ -170,6 +220,9 @@ func (ae *AudioEngine) startFFmpeg() error {
 		}
 		if ae.streamCmd != nil && ae.streamCmd.Process != nil {
 			ae.streamCmd.Process.Kill()
+		}
+		if ae.rtmpCmd != nil && ae.rtmpCmd.Process != nil {
+			ae.rtmpCmd.Process.Kill()
 		}
 		ae.mu.Unlock()
 	}()
@@ -307,6 +360,10 @@ func (ae *AudioEngine) Execute(trans Transition) error {
 	log.Printf("%s [Encoder] Playing: %s (Channel: %d, insert=%v)", 
 		ae.station.LogPrefix, filepath.Base(trans.NextFile), channelID, trans.IsInsert)
 	
+	if ae.Mixer != nil {
+		ae.Mixer.Channels[channelID].SetLabel(filepath.Base(trans.NextFile))
+	}
+	
 	// Stop previous process on this channel to avoid interleaving data
 	ae.StopChannel(channelID)
 	
@@ -327,6 +384,10 @@ func (ae *AudioEngine) PlayInstant(file string, channelID int) {
 	go func() {
 		log.Printf("%s [Encoder] PlayInstant: %s (Channel: %d)", 
 			ae.station.LogPrefix, filepath.Base(file), channelID)
+		
+		if ae.Mixer != nil {
+			ae.Mixer.Channels[channelID].SetLabel(filepath.Base(file))
+		}
 		
 		args := ae.buildFeederArgs(file)
 		if err := ae.feedStream(args, channelID); err != nil {
@@ -377,13 +438,9 @@ func (ae *AudioEngine) manageManualPlaylist(dir string) {
 	durations := make(map[int]float64)
 	lastMods := make(map[int]time.Time)
 
-	// Bersihkan sampah raw_seg_* dan seg_* lama agar folder tidak penuh dan playlist tidak kotor
+	// Bersihkan sampah raw_seg_* lama agar tidak mengacaukan perhitungan maxRawIdx.
+	// KITA MEMBIARKAN seg_*.ts (file jadi) agar player pendengar tidak terputus saat restart.
 	if files, err := filepath.Glob(filepath.Join(dir, "raw_seg_*.ts")); err == nil {
-		for _, f := range files {
-			os.Remove(f)
-		}
-	}
-	if files, err := filepath.Glob(filepath.Join(dir, "seg_*.ts")); err == nil {
 		for _, f := range files {
 			os.Remove(f)
 		}
@@ -439,9 +496,9 @@ func (ae *AudioEngine) manageManualPlaylist(dir string) {
 						if time.Since(info.ModTime()) > 500*time.Millisecond {
 							err := os.Rename(path, targetPath)
 							if err != nil {
-								log.Printf("[HLS] Gagal Rename %s -> %s: %v", base, fmt.Sprintf("seg_%d.ts", targetIdx), err)
+								log.Printf("[HLS] [%s] Gagal Rename %s -> %s: %v", filepath.Base(dir), base, fmt.Sprintf("seg_%d.ts", targetIdx), err)
 							} else {
-								log.Printf("[HLS] Promoted %s -> %s (Mantap)", base, fmt.Sprintf("seg_%d.ts", targetIdx))
+								log.Printf("[HLS] [%s] Promoted %s -> %s (Mantap)", filepath.Base(dir), base, fmt.Sprintf("seg_%d.ts", targetIdx))
 							}
 						}
 					}
@@ -538,7 +595,15 @@ func (ae *AudioEngine) Reset() {
 	if ae.ffmpegCmd != nil && ae.ffmpegCmd.Process != nil {
 		ae.ffmpegCmd.Process.Kill()
 	}
+	if ae.streamCmd != nil && ae.streamCmd.Process != nil {
+		ae.streamCmd.Process.Kill()
+	}
+	if ae.rtmpCmd != nil && ae.rtmpCmd.Process != nil {
+		ae.rtmpCmd.Process.Kill()
+	}
 	ae.ffmpegCmd = nil
+	ae.streamCmd = nil
+	ae.rtmpCmd = nil
 	ae.ffmpegIn = nil
 	ae.started = false
 	ae.prevFile = ""

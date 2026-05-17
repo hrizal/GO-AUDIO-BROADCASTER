@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/syslog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,6 +27,23 @@ const (
 )
 
 func main() {
+	lockFile, err := os.OpenFile("/tmp/streamer.lock", os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		fmt.Printf("Failed to open lock file: %v\n", err)
+		os.Exit(1)
+	}
+	// Keep the file open to hold the lock
+	defer lockFile.Close()
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		fmt.Println("Streamer is already running. Exiting.")
+		if sl, err := syslog.New(syslog.LOG_WARNING|syslog.LOG_DAEMON, "streamer"); err == nil {
+			sl.Warning("Streamer is already running. Exiting.")
+			sl.Close()
+		}
+		os.Exit(1)
+	}
+
 	port := flag.Int("port", 8080, "HTTP server port")
 	outputDir := flag.String("output", "./output", "Default HLS output directory")
 	silentDir := flag.String("silent", "./silent", "Directory containing silent_5s.mp3")
@@ -131,6 +149,52 @@ func main() {
 		fmt.Fprintf(w, `%d}`, manager.StationCount())
 	})
 
+	mux.HandleFunc("/station/update", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		stationID := r.FormValue("station_id")
+		if stationID == "" {
+			http.Error(w, "Missing station_id", http.StatusBadRequest)
+			return
+		}
+
+		entries, err := loadStationIDs(absConfig)
+		if err != nil {
+			http.Error(w, "Failed to read config", http.StatusInternalServerError)
+			return
+		}
+
+		var newConfig *types.StationConfigEntry
+		for _, e := range entries {
+			if e.ID == stationID {
+				newConfig = &e
+				break
+			}
+		}
+
+		if newConfig == nil {
+			http.Error(w, "Station not found in config", http.StatusNotFound)
+			return
+		}
+
+		st, exists := manager.GetStation(stationID)
+		if !exists {
+			http.Error(w, "Station not active", http.StatusNotFound)
+			return
+		}
+
+		// Update config
+		st.Station.Config = newConfig.Config
+		
+		// Soft Reset Audio Engine
+		st.Encoder.Reset()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok","message":"Station config updated and audio engine restarted"}`))
+	})
+
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *port),
 		Handler: mux,
@@ -152,6 +216,7 @@ func main() {
 	log.Printf("  POST /inject                - Inject files")
 	log.Printf("  POST /station/create        - Create station")
 	log.Printf("  POST /station/remove        - Remove station")
+	log.Printf("  POST /station/update        - Update config & soft restart")
 	log.Printf("  POST /queue/clear           - Clear queue")
 	log.Printf("  POST /queue/remove          - Remove file from queue")
 	log.Printf("  GET  /hls/{id}/{variant}/master.m3u8 - HLS")
@@ -188,8 +253,8 @@ func main() {
 // Format per line: station_id  [key=value ...]
 // Supported keys: random, loop, unique (bool), output (path)
 // Example:
-//   musikita  output=/var/www/musikita/webapp/hls  random=false  loop=true  unique=true
-//   ruangkita output=/var/www/ruangkita/webapp/hls  random=true   loop=true  unique=true
+//   radio1  output=/var/www/hls/radio1  random=false  loop=true  unique=true
+//   radio2 output=/var/www/hls/radio2  random=true   loop=true  unique=true
 func loadStationIDs(path string) ([]types.StationConfigEntry, error) {
 	f, err := os.Open(path)
 	if err != nil {
