@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"log/syslog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,22 +26,7 @@ const (
 )
 
 func main() {
-	lockFile, err := os.OpenFile("/tmp/streamer.lock", os.O_CREATE|os.O_RDWR, 0666)
-	if err != nil {
-		fmt.Printf("Failed to open lock file: %v\n", err)
-		os.Exit(1)
-	}
-	// Keep the file open to hold the lock
-	defer lockFile.Close()
-
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		fmt.Println("Streamer is already running. Exiting.")
-		if sl, err := syslog.New(syslog.LOG_WARNING|syslog.LOG_DAEMON, "streamer"); err == nil {
-			sl.Warning("Streamer is already running. Exiting.")
-			sl.Close()
-		}
-		os.Exit(1)
-	}
+	acquireLockOrExit()
 
 	port := flag.Int("port", 8080, "HTTP server port")
 	outputDir := flag.String("output", "./output", "Default HLS output directory")

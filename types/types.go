@@ -221,6 +221,7 @@ type InjectRequest struct {
 	Type      string   `json:"type"`
 	Mode      string   `json:"mode"`
 	Files     []string `json:"files"`
+	Crossfade *int     `json:"crossfade"`
 }
 
 // BitrateVariants holds directories for AAC (.ts) and Opus (.mp4)

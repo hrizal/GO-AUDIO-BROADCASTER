@@ -3,19 +3,22 @@ package encoder
 import (
 	"encoding/binary"
 	"io"
+	"math"
 	"sync"
 	"time"
-	"fmt"
 )
 
 type MixerChannel struct {
-	id     int
-	buffer []byte
-	mu     sync.Mutex
-	active bool
-	volume float64
-	Muted  bool
-	Label  string
+	id         int
+	buffer     []byte
+	mu         sync.Mutex
+	active     bool
+	currentVol float64
+	targetVol  float64
+	fadeStep   float64
+	Muted      bool
+	Label      string
+	restoreToken int64
 }
 
 func (c *MixerChannel) Write(p []byte) (n int, err error) {
@@ -26,12 +29,62 @@ func (c *MixerChannel) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func (c *MixerChannel) SetVolume(v float64) {
+func (c *MixerChannel) GetVolume() float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.targetVol
+}
+
+func (c *MixerChannel) SetVolume(v float64, durationSec float64) int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if v < 0 { v = 0 }
 	if v > 2.0 { v = 2.0 } // Allow up to 200%
-	c.volume = v
+	
+	c.restoreToken = time.Now().UnixNano()
+	
+	if durationSec <= 0 {
+		c.targetVol = v
+		c.currentVol = v
+		c.fadeStep = 0
+	} else {
+		// Linear approach: reach target in durationSec
+		// Assuming 50 ticks per second (20ms per tick)
+		ticks := durationSec * 50.0
+		if ticks < 1 {
+			ticks = 1
+		}
+		c.fadeStep = math.Abs(v - c.currentVol) / ticks
+		c.targetVol = v
+	}
+	return c.restoreToken
+}
+
+func (c *MixerChannel) RestoreVolume(v float64, durationSec float64, token int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	
+	// If token doesn't match, another process has taken control of this channel's volume
+	if c.restoreToken != token {
+		return false
+	}
+	
+	if v < 0 { v = 0 }
+	if v > 2.0 { v = 2.0 }
+	
+	if durationSec <= 0 {
+		c.targetVol = v
+		c.currentVol = v
+		c.fadeStep = 0
+	} else {
+		ticks := durationSec * 50.0
+		if ticks < 1 {
+			ticks = 1
+		}
+		c.fadeStep = math.Abs(v - c.currentVol) / ticks
+		c.targetVol = v
+	}
+	return true
 }
 
 func (c *MixerChannel) SetMute(m bool) {
@@ -60,21 +113,19 @@ type AudioMixer struct {
 	mu         sync.Mutex
 	running    bool
 	stopChan   chan struct{}
-	duckFactor float64
-	wasActive  bool
-	isDucking  bool
 }
 
 func NewAudioMixer(output io.Writer, numChannels int) *AudioMixer {
 	m := &AudioMixer{
 		Output:     output,
 		stopChan:   make(chan struct{}),
-		duckFactor: 1.0,
 	}
 	for i := 0; i < numChannels; i++ {
 		m.Channels = append(m.Channels, &MixerChannel{
-			id:     i,
-			volume: 1.0,
+			id:         i,
+			currentVol: 1.0,
+			targetVol:  1.0,
+			fadeStep:   1.0,
 		})
 	}
 	return m
@@ -125,54 +176,7 @@ func (m *AudioMixer) mixAndWrite(size int) {
 	samples := make([]int32, size/2)
 
 	m.mu.Lock()
-	// Auto-ducking logic
-	m.Channels[0].mu.Lock()
-	announcerActive := m.Channels[0].active && len(m.Channels[0].buffer) >= size && !m.Channels[0].Muted
-	announcerLabel := m.Channels[0].Label
-	m.Channels[0].mu.Unlock()
-
-	m.Channels[1].mu.Lock()
-	musicLabel := m.Channels[1].Label
-	m.Channels[1].mu.Unlock()
-
-	target := 1.0
-	if announcerActive {
-		target = 0.2
-	}
-
-	if announcerActive && !m.wasActive {
-		fmt.Printf("[Mixer] Channel 0 START play: %s\n", announcerLabel)
-		m.wasActive = true
-	}
-
-	if m.duckFactor > target {
-		if !m.isDucking {
-			fmt.Printf("[Mixer] Channel 1 VOLUME DOWN for: %s\n", musicLabel)
-			m.isDucking = true
-		}
-		// Ducking speed: 0.8 / 0.02 = 40 ticks * 20ms = 800ms fade-out
-		m.duckFactor -= 0.02
-		if m.duckFactor < target {
-			m.duckFactor = target
-		}
-	} else if m.duckFactor < target {
-		// Recovery speed: 0.8 / 0.005 = 160 ticks * 20ms = 3.2 seconds fade-in
-		m.duckFactor += 0.005
-		if m.duckFactor >= 1.0 {
-			m.duckFactor = 1.0
-			if m.isDucking {
-				fmt.Printf("[Mixer] Channel 1 VOLUME UP back to normal\n")
-				m.isDucking = false
-			}
-		}
-	}
-
-	if !announcerActive && m.wasActive {
-		fmt.Printf("[Mixer] Channel 0 END play: %s\n", announcerLabel)
-		m.wasActive = false
-	}
-
-	duck := m.duckFactor
+	duck := 1.0
 	m.mu.Unlock()
 
 	for i, ch := range m.Channels {
@@ -203,7 +207,22 @@ func (m *AudioMixer) mixAndWrite(size int) {
 			ch.active = false
 		}
 
-		vol := ch.volume
+		// Apply exact linear fade based on fadeStep calculated from duration
+		if ch.targetVol != ch.currentVol && ch.fadeStep > 0 {
+			if ch.currentVol < ch.targetVol {
+				ch.currentVol += ch.fadeStep
+				if ch.currentVol > ch.targetVol {
+					ch.currentVol = ch.targetVol
+				}
+			} else {
+				ch.currentVol -= ch.fadeStep
+				if ch.currentVol < ch.targetVol {
+					ch.currentVol = ch.targetVol
+				}
+			}
+		}
+
+		vol := ch.currentVol
 		if i > 0 {
 			vol = vol * duck
 		}
@@ -234,7 +253,7 @@ func (m *AudioMixer) GetStatus() []ChannelStatus {
 		status[i] = ChannelStatus{
 			ID:     ch.id,
 			Active: ch.active,
-			Volume: ch.volume,
+			Volume: ch.targetVol,
 			Muted:  ch.Muted,
 			Label:  ch.Label,
 		}

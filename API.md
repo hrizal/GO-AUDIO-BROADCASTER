@@ -95,6 +95,7 @@ Content-Type: application/json
 | `type` | string | ✅ | `"playlist"` or `"insert"` |
 | `mode` | string | ❌ | `"append"` (default) or `"replace"` |
 | `files` | array[string] | ✅ | Absolute paths to audio files on server |
+| `crossfade` | integer | ❌ | Optional playlist crossfade duration (in seconds) to apply |
 
 ### Mode: Append vs Replace
 
@@ -427,13 +428,16 @@ Content-Type: application/json
 {
     "station_id": "radio1",
     "channel": 0,
-    "volume": 1.5
+    "volume": 1.5,
+    "duration": 3.0
 }
 ```
-| Field | Description |
-|-------|-------------|
-| `channel` | `0` (Announcer), `1-2` (Playlist), `3-7` (Spare) |
-| `volume` | `0.0` (Mute) to `2.0` (200% Gain) |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `station_id` | string | ✅ | Target station ID |
+| `channel` | integer | ✅ | `0` (Announcer), `1-2` (Playlist), `3-7` (Spare) |
+| `volume` | float | ✅ | `0.0` (Mute) to `2.0` (200% Gain) |
+| `duration` | float | ❌ | Optional transition duration in seconds for smooth volume fades |
 
 ### 15.3 Set Channel Mute
 ```
@@ -449,9 +453,9 @@ Content-Type: application/json
 
 ---
 
-## 16. Breaking Audio (Instant Play)
+## 16. Breaking Audio (Smart Inject)
 
-Triggers an immediate audio broadcast on **Channel 0** (Announcer) with **Auto-Ducking** on other channels. Perfect for real-time announcements or breaking news.
+Triggers an immediate prioritized audio broadcast with configurable faders, crossfades, automatic ducking, and token-based automatic recovery. Perfect for real-time announcements, voice overs, or urgent breaking news.
 
 ```
 POST /breaking
@@ -459,9 +463,29 @@ Content-Type: application/json
 
 {
     "station_id": "radio1",
-    "file": "/path/to/announcement/breaking.mp3"
+    "file": "/path/to/announcement/breaking.mp3",
+    "channel": 0,
+    "crossfade": 3.0,
+    "volumes": {
+        "0": 100,
+        "1": 10,
+        "2": 10
+    },
+    "force": false
 }
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `station_id` | string | ✅ | Target station ID |
+| `file` | string | ✅ | Absolute path to the voice announcement or audio file |
+| `channel` | integer | ❌ | Target mixer channel (defaults to `0` for voice/announcer) |
+| `crossfade` | float | ❌ | Crossfade duration in seconds for the ducking and restoration transition |
+| `volumes` | object | ❌ | Map of channel IDs to fader volumes (0 to 100) during playback |
+| `force` | boolean | ❌ | Set to `true` to force override if the channel is currently occupied |
+
+### Token-Based Auto-Restoration
+To prevent sequential overlaps from breaking fader restoration, a unique UnixNano token is generated for every request. Faders are automatically restored to their baseline level (typically `1.0` or 100%) upon audio completion *only* if no subsequent breaking request has taken over.
 
 ---
 

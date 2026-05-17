@@ -457,7 +457,26 @@ func (m *Manager) RestartCurrent(stationID string) error {
 	return nil
 }
 
-func (m *Manager) SetMixerVolume(stationID string, channelID int, volume float64) error {
+func (m *Manager) SetMixerVolume(stationID string, channelID int, volume float64, durationSec float64) (int64, error) {
+	m.mu.RLock()
+	runner, exists := m.stations[stationID]
+	m.mu.RUnlock()
+
+	if !exists {
+		return 0, fmt.Errorf("station not found: %s", stationID)
+	}
+	if runner.Encoder.Mixer == nil {
+		return 0, fmt.Errorf("mixer not initialized for station %s", stationID)
+	}
+	if channelID < 0 || channelID >= len(runner.Encoder.Mixer.Channels) {
+		return 0, fmt.Errorf("invalid channel ID: %d", channelID)
+	}
+
+	token := runner.Encoder.Mixer.Channels[channelID].SetVolume(volume, durationSec)
+	return token, nil
+}
+
+func (m *Manager) RestoreMixerVolume(stationID string, channelID int, volume float64, durationSec float64, token int64) error {
 	m.mu.RLock()
 	runner, exists := m.stations[stationID]
 	m.mu.RUnlock()
@@ -472,7 +491,7 @@ func (m *Manager) SetMixerVolume(stationID string, channelID int, volume float64
 		return fmt.Errorf("invalid channel ID: %d", channelID)
 	}
 
-	runner.Encoder.Mixer.Channels[channelID].SetVolume(volume)
+	runner.Encoder.Mixer.Channels[channelID].RestoreVolume(volume, durationSec, token)
 	return nil
 }
 
@@ -493,6 +512,21 @@ func (m *Manager) SetMixerMute(stationID string, channelID int, mute bool) error
 
 	runner.Encoder.Mixer.Channels[channelID].SetMute(mute)
 	return nil
+}
+
+func (m *Manager) GetChannelVolume(stationID string, channelID int) float64 {
+	m.mu.RLock()
+	runner, exists := m.stations[stationID]
+	m.mu.RUnlock()
+
+	if !exists || runner.Encoder.Mixer == nil {
+		return 1.0 // Default fallback
+	}
+	if channelID < 0 || channelID >= len(runner.Encoder.Mixer.Channels) {
+		return 1.0
+	}
+	
+	return runner.Encoder.Mixer.Channels[channelID].GetVolume()
 }
 
 func (m *Manager) GetMixerStatus(stationID string) ([]encoder.ChannelStatus, error) {

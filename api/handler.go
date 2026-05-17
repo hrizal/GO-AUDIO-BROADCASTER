@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/streamer/encoder"
 	"github.com/streamer/station"
 	"github.com/streamer/types"
 )
@@ -227,6 +230,15 @@ func (h *Handler) handleInject(w http.ResponseWriter, r *http.Request) {
 	if err := h.manager.InjectFiles(req.StationID, req.Type, req.Files, mode); err != nil {
 		http.Error(w, "Injection failed: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Update crossfade config if provided
+	if req.Crossfade != nil && req.Type == "playlist" {
+		if st, ok := h.manager.GetStation(req.StationID); ok {
+			newCfg := st.Station.Config
+			newCfg.Crossfade = *req.Crossfade
+			h.manager.SetConfig(req.StationID, newCfg)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -517,13 +529,14 @@ func (h *Handler) handleMixerVolume(w http.ResponseWriter, r *http.Request) {
 		StationID string  `json:"station_id"`
 		Channel   int     `json:"channel"`
 		Volume    float64 `json:"volume"`
+		Duration  float64 `json:"duration"` // optional duration
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := h.manager.SetMixerVolume(req.StationID, req.Channel, req.Volume); err != nil {
+	if _, err := h.manager.SetMixerVolume(req.StationID, req.Channel, req.Volume, req.Duration); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -562,43 +575,157 @@ func (h *Handler) handleMixerMute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleBreaking(w http.ResponseWriter, r *http.Request) {
-if r.Method != http.MethodPost {
-http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-return
-}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-var req struct {
-StationID string `json:"station_id"`
-File      string `json:"file"`
-}
-if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
-return
-}
+	var req struct {
+		StationID string             `json:"station_id"`
+		File      string             `json:"file"`
+		Channel   *int               `json:"channel"`
+		Crossfade float64            `json:"crossfade"`
+		Volumes   map[string]float64 `json:"volumes"`
+		Force     bool               `json:"force"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Invalid JSON format: `+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
 
-if req.StationID == "" || req.File == "" {
-http.Error(w, "station_id and file are required", http.StatusBadRequest)
-return
-}
+	if req.StationID == "" {
+		http.Error(w, `{"error": "Parameter 'station_id' is required."}`, http.StatusBadRequest)
+		return
+	}
 
-// Cek apakah file ada
-if _, err := os.Stat(req.File); os.IsNotExist(err) {
-http.Error(w, "file not found: "+req.File, http.StatusBadRequest)
-return
-}
+	// Default channel to 0 (voice/announcer channel) if omitted
+	targetChannelID := 0
+	if req.Channel != nil {
+		targetChannelID = *req.Channel
+	}
 
-// Mainkan INSTANT di Kanal 0 (Penyiar)
-if err := h.manager.PlayInstant(req.StationID, req.File, 0); err != nil {
-http.Error(w, err.Error(), http.StatusInternalServerError)
-return
-}
+	// Default crossfade duration to 3.0 seconds if omitted or zero
+	fadeDur := req.Crossfade
+	if fadeDur <= 0.0 {
+		fadeDur = 3.0
+	}
 
-w.Header().Set("Content-Type", "application/json")
-json.NewEncoder(w).Encode(map[string]interface{}{
-"status": "ok",
-"msg":    "Breaking audio triggered on Channel 0 with Auto-Ducking",
-})
-	log.Printf("[API] Breaking audio triggered for station %s: %s", req.StationID, req.File)
+	// Default volumes map to standard announcer ducking profile if omitted
+	volumes := req.Volumes
+	if volumes == nil {
+		volumes = map[string]float64{
+			"0": 100.0, // target announcer channel
+			"1": 10.0,  // duck playlist channel 1
+			"2": 10.0,  // duck playlist channel 2
+		}
+		// In case they set a non-zero channel, ensure it is set to 100
+		if targetChannelID != 0 {
+			chStr := strconv.Itoa(targetChannelID)
+			volumes[chStr] = 100.0
+		}
+	}
+
+	// Check if channel is active to prevent collision
+	if req.File != "" && !req.Force {
+		statusList, err := h.manager.GetMixerStatus(req.StationID)
+		if err == nil && targetChannelID >= 0 && targetChannelID < len(statusList) {
+			if statusList[targetChannelID].Active {
+				http.Error(w, `{"error": "Wait! Channel `+strconv.Itoa(targetChannelID)+` is currently playing something ('`+statusList[targetChannelID].Label+`'). If you are sure you want to override it, add the parameter \"force\": true to your JSON payload."}`, http.StatusConflict)
+				return
+			}
+		}
+	}
+
+	// Check if file exists
+	if req.File != "" {
+		if _, err := os.Stat(req.File); os.IsNotExist(err) {
+			http.Error(w, `{"error": "File not found: `+req.File+`"}`, http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Execute Smart Inject in background
+	go func() {
+		// 1. Instant fade-in and injection
+		if req.File != "" {
+			// Set volume to 0 instantly before playing to ensure smooth fade
+			h.manager.SetMixerVolume(req.StationID, targetChannelID, 0.0, 0.0)
+			
+			h.manager.PlayInstant(req.StationID, req.File, targetChannelID)
+		}
+
+		// Map to hold original volumes before modification
+		type volData struct {
+			origVol float64
+			token   int64
+		}
+		channelData := make(map[int]*volData)
+
+		// 2. Execute volume modifications (Smart Ducking)
+		if volumes != nil {
+			var wg sync.WaitGroup
+			
+			for chStr, volPct := range volumes {
+				chID, err := strconv.Atoi(chStr)
+				if err != nil {
+					continue
+				}
+				
+				origVol := h.manager.GetChannelVolume(req.StationID, chID)
+				// If volume is currently ducked (less than 1.0), assume baseline is 1.0
+				// as it's likely being ducked by an overlapping insert
+				if origVol < 1.0 {
+					origVol = 1.0
+				}
+				
+				cd := &volData{origVol: origVol}
+				channelData[chID] = cd
+
+				// Normalize 0-100 to 0.0-1.0
+				targetVol := volPct / 100.0
+				if targetVol > 1.0 { targetVol = 1.0 }
+				if targetVol < 0.0 { targetVol = 0.0 }
+
+				if req.File != "" && chID != targetChannelID {
+					// Delay fade out on other channels by 1 second so the injected audio comes in first
+					wg.Add(1)
+					go func(cid int, tvol float64, dur float64, d *volData) {
+						defer wg.Done()
+						time.Sleep(1 * time.Second)
+						token, _ := h.manager.SetMixerVolume(req.StationID, cid, tvol, dur)
+						d.token = token
+					}(chID, targetVol, fadeDur, cd)
+				} else {
+					// Fade in target channel immediately
+					token, _ := h.manager.SetMixerVolume(req.StationID, chID, targetVol, fadeDur)
+					cd.token = token
+				}
+			}
+			
+			// Wait for all SetMixerVolume calls (max 1 second) to gather tokens
+			wg.Wait()
+		}
+
+		// 3. Auto-Restore Volume (if file duration is known)
+		if req.File != "" && volumes != nil {
+			dur := encoder.GetAudioDuration(req.File)
+			if dur > 1.0 {
+				// Subtract 1 second as we already waited 1 second during delayed fade-out
+				time.Sleep(time.Duration((dur - 1.0) * float64(time.Second)))
+				
+				// Restore original volume (only if token matches, meaning no other insert took over)
+				for chID, cd := range channelData {
+					h.manager.RestoreMixerVolume(req.StationID, chID, cd.origVol, fadeDur, cd.token)
+				}
+			}
+		}
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": "Smart inject command executed successfully",
+	})
 }
 
 func (h *Handler) handleMixerRestart(w http.ResponseWriter, r *http.Request) {
