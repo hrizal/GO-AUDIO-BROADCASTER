@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/streamer/types"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/types"
 )
 
 const (
