@@ -12,9 +12,9 @@ import (
 	"time"
 	"strconv"
 
-	"github.com/streamer/encoder"
-	"github.com/streamer/station"
-	"github.com/streamer/types"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/encoder"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/station"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/types"
 )
 
 // Handler manages HTTP endpoints
