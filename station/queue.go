@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/streamer/types"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/types"
 )
 
 // persistedQueue is the on-disk format for queue persistence
