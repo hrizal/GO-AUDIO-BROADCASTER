@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/streamer/types"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/types"
 )
 
 const (
