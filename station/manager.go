@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/streamer/encoder"
-	"github.com/streamer/types"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/encoder"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/types"
 )
 
 // Manager coordinates all station runners
