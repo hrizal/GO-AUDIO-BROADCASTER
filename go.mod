@@ -1,4 +1,4 @@
-module github.com/streamer
+module github.com/hrizal/GO-AUDIO-BROADCASTER
 
 go 1.24.0
 
