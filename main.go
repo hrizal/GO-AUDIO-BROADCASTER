@@ -14,9 +14,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/streamer/api"
-	"github.com/streamer/station"
-	"github.com/streamer/types"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/api"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/station"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/types"
 )
 
 const (
