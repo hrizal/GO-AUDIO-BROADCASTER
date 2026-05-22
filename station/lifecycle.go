@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/streamer/encoder"
-	"github.com/streamer/hls"
-	"github.com/streamer/types"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/encoder"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/hls"
+	"github.com/hrizal/GO-AUDIO-BROADCASTER/types"
 )
 
 const (
